@@ -32,6 +32,7 @@ import { searchShaders, installShader, listInstalledShaders, deleteShader } from
 import { resolveInstanceRoot, INSTANCE_ROOT_NAME, sanitizeRootName } from './instancePath'
 import { config } from './config'
 import type { LaunchProgress, SyncProgress } from '../shared/types'
+import { initAutoUpdater, quitAndInstall } from './updater'
 
 // 選択中の modpack を解決する（未選択なら先頭、無ければ null）。
 async function resolveSelectedModpack(): Promise<Modpack | null> {
@@ -72,6 +73,12 @@ function sendLog(line: string) {
 
 app.whenReady().then(() => {
   createWindow()
+
+  // 自動更新（配布版のみ。GitHub Releases を更新元にチェック→自動DL）。
+  initAutoUpdater(() => mainWindow)
+
+  // 更新をダウンロード済みなら適用して再起動。
+  ipcMain.handle('update:install', () => quitAndInstall())
 
   ipcMain.handle('app:quit', () => {
     app.quit()

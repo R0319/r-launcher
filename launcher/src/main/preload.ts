@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('rLauncher', {
   onLaunchProgress: (cb: (progress: unknown) => void) =>
     ipcRenderer.on('play:launch-progress', (_e, progress) => cb(progress)),
   onLog: (cb: (line: string) => void) => ipcRenderer.on('app:log', (_e, line) => cb(line)),
+  // 自動更新
+  onUpdateStatus: (cb: (status: unknown) => void) =>
+    ipcRenderer.on('update:status', (_e, status) => cb(status)),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
   // 管理者機能
   adminCheck: () => ipcRenderer.invoke('admin:check'),
   adminListAdmins: () => ipcRenderer.invoke('admin:list-admins'),

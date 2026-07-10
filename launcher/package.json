@@ -1,6 +1,6 @@
 {
   "name": "r-launcher",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "R-Launcher - Minecraft NeoForge launcher",
   "main": "dist/main/index.js",
   "type": "commonjs",
@@ -12,6 +12,7 @@
   "license": "UNLICENSED",
   "dependencies": {
     "dotenv": "^17.4.2",
+    "electron-updater": "^6.8.9",
     "eml-lib": "^2.3.7",
     "prismarine-nbt": "^2.8.0"
   },
@@ -37,7 +38,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "artifactName": "${productName}-Setup-${version}.${ext}"
@@ -49,6 +52,13 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "R-Launcher"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "R0319",
+        "repo": "r-launcher"
+      }
+    ]
   }
 }

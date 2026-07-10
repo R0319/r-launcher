@@ -603,3 +603,24 @@ select:focus {
   word-break: break-all;
   margin: 0;
 }
+
+/* ===== 自動更新バナー ===== */
+.update-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+.update-banner.hidden {
+  display: none;
+}

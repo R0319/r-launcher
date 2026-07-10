@@ -7,6 +7,12 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
+    <!-- ===== 自動更新バナー（更新がある時だけ表示） ===== -->
+    <div id="update-banner" class="update-banner hidden">
+      <span id="update-banner-text"></span>
+      <button id="update-banner-install" class="btn-primary btn-sm hidden">今すぐ再起動して更新</button>
+    </div>
+
     <!-- ===== 認証前（フルスクリーン） ===== -->
     <div id="preauth">
       <!-- 0. 初回セットアップ（保存先選択） -->

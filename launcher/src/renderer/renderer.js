@@ -57,6 +57,37 @@ function appendLog(line) {
   out.scrollTop = out.scrollHeight
 }
 window.rLauncher.onLog((line) => appendLog(line))
+
+// ===== 自動更新バナー =====
+window.rLauncher.onUpdateStatus((status) => {
+  const banner = $('update-banner')
+  const text = $('update-banner-text')
+  const installBtn = $('update-banner-install')
+  installBtn.classList.add('hidden')
+  switch (status.state) {
+    case 'available':
+      banner.classList.remove('hidden')
+      text.textContent = `新しいバージョン ${status.version} が見つかりました。ダウンロード中...`
+      break
+    case 'downloading':
+      banner.classList.remove('hidden')
+      text.textContent = `更新をダウンロード中... ${status.percent}%`
+      break
+    case 'downloaded':
+      banner.classList.remove('hidden')
+      text.textContent = `バージョン ${status.version} の準備ができました。`
+      installBtn.classList.remove('hidden')
+      break
+    case 'error':
+      // 更新チェック失敗は致命的でないので控えめに（バナーは出さない）
+      console.warn('update error:', status.message)
+      break
+    default:
+      // checking / none はバナーを出さない
+      banner.classList.add('hidden')
+  }
+})
+$('update-banner-install').addEventListener('click', () => window.rLauncher.installUpdate())
 $('btn-log-clear').addEventListener('click', () => {
   $('log-output').textContent = ''
 })
