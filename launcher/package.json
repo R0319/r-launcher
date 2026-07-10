@@ -1,0 +1,54 @@
+{
+  "name": "r-launcher",
+  "version": "1.0.0",
+  "description": "R-Launcher - Minecraft NeoForge launcher",
+  "main": "dist/main/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.js",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "eml-lib": "^2.3.7",
+    "prismarine-nbt": "^2.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "electron": "^41.9.2",
+    "electron-builder": "^26.15.3",
+    "typescript": "^6.0.3"
+  },
+  "build": {
+    "appId": "jp.r0319.rlauncher",
+    "productName": "R-Launcher",
+    "copyright": "Copyright © 2026 r0319",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "R-Launcher"
+    }
+  }
+}

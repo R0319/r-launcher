@@ -1,0 +1,19 @@
+node_modules/
+dist/
+build/
+out/
+release/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+*.pem
+*.ppk
+/server/mods_store/
+/server/players.json
+
+# インフラ情報（EC2 IP・SSH鍵パス・サーバーIP等）を含む内部仕様書は公開しない
+SPEC_R0319-Launcher.md
+.vscode/
