@@ -17,3 +17,6 @@ Thumbs.db
 # インフラ情報（EC2 IP・SSH鍵パス・サーバーIP等）を含む内部仕様書は公開しない
 SPEC_R0319-Launcher.md
 .vscode/
+
+# electron-builder の一時出力（ロック回避用の別出力先）
+/launcher/dist-installer/

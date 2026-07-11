@@ -1,7 +1,7 @@
 import { app, type BrowserWindow } from 'electron'
-import electronUpdater from 'electron-updater'
-
-const { autoUpdater } = electronUpdater
+// electron-updater は CommonJS モジュールで default エクスポートを持たないため、
+// 名前付きインポートで取得する（default インポートだと autoUpdater が undefined になり起動時クラッシュ）。
+import { autoUpdater } from 'electron-updater'
 
 // 自動更新の状態をレンダラーへ通知する型（renderer と共有）。
 export type UpdateStatus =
