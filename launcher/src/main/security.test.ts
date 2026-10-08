@@ -102,7 +102,8 @@ describe('store', () => {
           ...account,
           accessToken: 'v1enc-secret-access',
           refreshToken: 'v1enc-secret-refresh',
-          clientToken: 'v1enc-secret-client',
+          // v1 は clientToken を暗号化せずに保存していた
+          clientToken: 'secret-client',
         },
       }),
     )

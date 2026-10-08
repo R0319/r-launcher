@@ -103,7 +103,8 @@ export class Store {
   }
 
   /**
-   * v1 は safeStorage で暗号化した base64 を（印なしで）保存していた。復号できたものだけ引き継ぎ、
+   * v1 は accessToken と refreshToken だけを safeStorage で暗号化した base64 で（印なしで）保存していた
+   * （clientToken は秘密ではない識別子で平文）。復号できたときだけ引き継ぎ、
    * 復号できない値（v1 が暗号化できずに平文で保存したもの）は信用せず捨てて、ログインし直してもらう
    */
   private decodeV1Account(raw: unknown): Account | null {
@@ -111,7 +112,7 @@ export class Store {
     const copy: Record<string, unknown> = { ...(raw as Record<string, unknown>) }
     if (typeof copy.name !== 'string' || typeof copy.uuid !== 'string') return null
     if (typeof copy.accessToken !== 'string' || !copy.accessToken) return null
-    for (const field of TOKEN_FIELDS) {
+    for (const field of ['accessToken', 'refreshToken'] as const) {
       const value = copy[field]
       if (typeof value !== 'string' || !value) continue
       try {
