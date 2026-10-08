@@ -47,7 +47,10 @@
       "buildResources": "build"
     },
     "files": [
-      "dist/**/*",
+      "dist/main/**/*",
+      "dist/preload/**/*",
+      "dist/renderer/**/*",
+      "dist/shared/**/*",
       "package.json"
     ],
     "win": {
@@ -75,6 +78,16 @@
         "owner": "R0319",
         "repo": "r-launcher"
       }
-    ]
+    ],
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    },
+    "asar": true
   }
 }

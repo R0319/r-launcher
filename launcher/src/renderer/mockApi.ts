@@ -259,7 +259,10 @@ export function createMockApi(options: MockOptions = {}): RLauncherApi & {
       const detail = detailOf(input.serverId)
       details[input.serverId] = {
         ...detail,
-        shaders: [{ fileName: `${input.projectId}.zip`, enabled: true, sizeBytes: 300_000 }],
+        [input.type === 'shader' ? 'shaders' : 'resourcepacks']: [
+          ...(input.type === 'shader' ? detail.shaders : detail.resourcepacks),
+          { fileName: `${input.projectId}.zip`, enabled: true, sizeBytes: 300_000 },
+        ],
       }
       return details[input.serverId]!
     },

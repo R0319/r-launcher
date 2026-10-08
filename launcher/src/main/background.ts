@@ -32,13 +32,15 @@ export function importBackground(source: string, dir: string): string {
 export function resolveBackgroundRequest(url: string, dir: string): string | null {
   let parsed: URL
   try {
+    // URL が .. を正規化する前に拒否し、不正なエスケープも null にする。
+    if (decodeURIComponent(url).split('/').includes('..')) return null
     parsed = new URL(url)
+    if (parsed.protocol !== 'rl-bg:' || parsed.hostname !== 'image') return null
+    const name = decodeURIComponent(parsed.pathname.replace(/^\//, ''))
+    return BACKGROUND_NAME.test(name) ? path.join(dir, name) : null
   } catch {
     return null
   }
-  if (parsed.protocol !== 'rl-bg:' || parsed.hostname !== 'image') return null
-  const name = decodeURIComponent(parsed.pathname.replace(/^\//, ''))
-  return BACKGROUND_NAME.test(name) ? path.join(dir, name) : null
 }
 
 export function backgroundUrl(name: string | null): string | null {

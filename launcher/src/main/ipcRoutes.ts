@@ -42,7 +42,7 @@ export function routes(deps: RouteDeps): Record<string, Handler> {
     'servers:optional-mod': (serverId, projectId, enabled) =>
       service.setOptionalMod(
         id(serverId),
-        z.string().max(64).parse(projectId),
+        z.string().min(1).max(64).parse(projectId),
         z.boolean().parse(enabled),
       ),
     'servers:retire-extras': (serverId) => service.retireExtraMods(id(serverId)),

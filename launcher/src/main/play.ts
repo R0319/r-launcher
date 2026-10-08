@@ -2,6 +2,7 @@
 // 起動したら（ゲームの終了を待たずに）結果を返す。
 import os from 'node:os'
 import path from 'node:path'
+import { mkdir } from 'node:fs/promises'
 import type { PlayPhase, PlayResult } from '../shared/ipc'
 import { DOWNLOAD_HOSTS } from './http'
 import { parseJvmArgs, validateMemory } from './javaArgs'
@@ -104,6 +105,8 @@ async function prepareAndLaunch(
       return { ok: false, reason: 'integrity', integrity: view }
   }
 
+  // Mod が無い初回起動でも、servers.dat の保存先を用意する。
+  await mkdir(gameDir, { recursive: true })
   ensureServerRegistered(gameDir, manifest.server.host, manifest.server.port, manifest.name)
 
   await new Promise<void>((resolve, reject) => {

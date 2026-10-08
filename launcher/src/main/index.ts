@@ -36,6 +36,8 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'rl-bg', privileges: { standard: true, secure: true, supportFetchAPI: false } },
 ])
 app.enableSandbox()
+// 開発中の起動では、インストール済みの R-Launcher の設定（%APPDATA%\r-launcher）に触れない
+if (!app.isPackaged) app.setPath('userData', path.join(app.getPath('appData'), 'r-launcher-dev'))
 
 let mainWindow: BrowserWindow | undefined
 const rendererIndex = path.join(__dirname, '..', 'renderer', 'index.html')
@@ -198,17 +200,15 @@ function start() {
             onPhase: (phase) => send('play:progress', phase),
             onRunning: (name) => {
               if (!service.settings.discordRichPresence) return
-              void rpc
-                .connect()
-                .then((ok) =>
-                  ok
-                    ? rpc.setActivity({
-                        details: name,
-                        state: 'プレイ中',
-                        startTimestamp: Date.now(),
-                      })
-                    : false,
-                )
+              void rpc.connect().then((ok) =>
+                ok
+                  ? rpc.setActivity({
+                      details: name,
+                      state: 'プレイ中',
+                      startTimestamp: Date.now(),
+                    })
+                  : false,
+              )
             },
             onExit: () => {
               void rpc.setActivity(null)
