@@ -1,490 +1,239 @@
-import { app, BrowserWindow, ipcMain, dialog, clipboard } from 'electron'
+// Electron のエントリ。ウィンドウとセキュリティの設定、各部品の組み立てだけを行う。
+import os from 'node:os'
 import path from 'node:path'
-import type { Account } from 'eml-lib'
-import { loginWithMicrosoft, refreshMicrosoftAccount } from './msAuth'
-import { getDiscordAuthCode } from './discordAuth'
-import { readFile, stat, writeFile } from 'node:fs/promises'
+import { pathToFileURL } from 'node:url'
 import {
-  fetchPlayerStatus,
-  submitDiscordCallback,
-  fetchModpacks,
-  adminCheck,
-  adminListModpacks,
-  adminCreateModpack,
-  adminUpdateModpack,
-  adminDeleteModpack,
-  adminListMods,
-  adminUpload,
-  adminDelete,
-  adminRegenerate,
-  modrinthSearch,
-  modrinthInstall,
-  adminListAdmins,
-  adminAddAdmin,
-  adminRemoveAdmin,
-} from './api'
-import type { LoaderType, ModSide, Modpack } from '../shared/types'
-import { loadStore, saveStore, type StoredData } from './store'
-import { syncMods } from './modSync'
-import { launchModpack } from './launch'
-import { ensureServerRegistered } from './serversDat'
-import { searchShaders, installShader, listInstalledShaders, deleteShader } from './shaderInstall'
-import { resolveInstanceRoot, INSTANCE_ROOT_NAME, sanitizeRootName } from './instancePath'
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  net,
+  protocol,
+  safeStorage,
+  session,
+  shell,
+  type IpcMainInvokeEvent,
+} from 'electron'
+import { writeFile } from 'node:fs/promises'
+import { Addons } from './addons'
+import { resolveBackgroundRequest } from './background'
 import { config } from './config'
-import type { LaunchProgress, SyncProgress } from '../shared/types'
+import { DiscordRpc } from './discordRpc'
+import { Features } from './features'
+import { createHttp } from './http'
+import { register } from './ipcRoutes'
+import { launchGame } from './launch'
+import { LogBuffer } from './logs'
+import { loginWithMicrosoft, refreshMicrosoftAccount } from './msAuth'
+import { play, totalMemoryMb } from './play'
+import { pingServer } from './serverPing'
+import { LauncherService, type Platform } from './service'
+import { Store } from './store'
 import { initAutoUpdater, quitAndInstall } from './updater'
 
-// 選択中の modpack を解決する（未選択なら先頭、無ければ null）。
-async function resolveSelectedModpack(): Promise<Modpack | null> {
-  const data = loadStore()
-  const modpacks = await fetchModpacks()
-  if (modpacks.length === 0) return null
-  const sel = modpacks.find((m) => m.id === data.selectedModpackId)
-  return sel ?? modpacks[0]
-}
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'rl-bg', privileges: { standard: true, secure: true, supportFetchAPI: false } },
+])
+app.enableSandbox()
 
-let mainWindow: BrowserWindow
-// ゲーム起動中フラグ（多重起動防止 + Playボタンロックの整合用）
-let gameRunning = false
+let mainWindow: BrowserWindow | undefined
+const rendererIndex = path.join(__dirname, '..', 'renderer', 'index.html')
+const rendererUrl = pathToFileURL(rendererIndex).toString()
+
+function send(channel: string, value: unknown) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, value)
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 680,
-    minWidth: 860,
-    minHeight: 560,
+    width: 1120,
+    height: 720,
+    minWidth: 900,
+    minHeight: 600,
+    backgroundColor: '#181917',
+    title: 'R-Launcher',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      spellcheck: false,
+      devTools: !app.isPackaged,
     },
   })
-  mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'))
+  mainWindow.setMenuBarVisibility(false)
+  void mainWindow.loadFile(rendererIndex)
 }
 
-// レンダラーのログ画面へ1行送る（タイムスタンプ付き）。console にも出す。
-function sendLog(line: string) {
-  const stamped = `[${new Date().toLocaleTimeString()}] ${line}`
-  console.log(stamped)
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('app:log', stamped)
-  }
+/** 画面（main ウィンドウの、自分の index.html）からの呼び出しだけを受け付ける */
+function isTrustedSender(event: IpcMainInvokeEvent) {
+  const frame = event.senderFrame
+  return (
+    !!mainWindow &&
+    event.sender === mainWindow.webContents &&
+    !!frame &&
+    frame === mainWindow.webContents.mainFrame &&
+    frame.url.split('#')[0] === rendererUrl
+  )
 }
 
-app.whenReady().then(() => {
-  createWindow()
-
-  // 自動更新（配布版のみ。GitHub Releases を更新元にチェック→自動DL）。
-  initAutoUpdater(() => mainWindow)
-
-  // 更新をダウンロード済みなら適用して再起動。
-  ipcMain.handle('update:install', () => quitAndInstall())
-
-  ipcMain.handle('app:quit', () => {
-    app.quit()
-  })
-
-  ipcMain.handle('app:copy-text', (_event, text: string) => {
-    clipboard.writeText(text ?? '')
-  })
-
-  // ログをファイルに保存（ダウンロード）
-  ipcMain.handle('app:save-log', async (_event, text: string) => {
-    const ts = new Date().toISOString().replace(/[:.]/g, '-')
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: 'ログを保存',
-      defaultPath: `r-launcher-log-${ts}.txt`,
-      filters: [{ name: 'テキスト', extensions: ['txt', 'log'] }],
+function hardenWebContents() {
+  app.on('web-contents-created', (_event, contents) => {
+    // 新しいウィンドウは開かせない（外部リンクは main 側で検査してから既定のブラウザで開く）
+    contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    contents.on('will-attach-webview', (event) => event.preventDefault())
+    contents.on('will-navigate', (event, url) => {
+      // ランチャー本体の画面は index.html から移動させない。
+      // Microsoft のログイン画面（eml-lib が開く別ウィンドウ）は移動を許す
+      if (mainWindow && contents === mainWindow.webContents && url !== rendererUrl)
+        event.preventDefault()
     })
-    if (result.canceled || !result.filePath) return false
-    await writeFile(result.filePath, text ?? '', 'utf-8')
-    return true
   })
+  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) =>
+    callback(false),
+  )
+  session.defaultSession.setPermissionCheckHandler(() => false)
+}
 
-  // --- modpack（プレイヤー向け） ---
-  ipcMain.handle('modpack:list', async () => {
-    const modpacks = await fetchModpacks()
-    const data = loadStore()
-    const selectedId =
-      modpacks.find((m) => m.id === data.selectedModpackId)?.id ?? modpacks[0]?.id ?? null
-    return { modpacks, selectedId }
-  })
-
-  ipcMain.handle('modpack:select', (_event, modpackId: string) => {
-    const data = loadStore()
-    data.selectedModpackId = modpackId
-    saveStore(data)
-  })
-
-  // --- シェーダー（プレイヤー各自が個別導入。同期対象外・EC2 非経由） ---
-  ipcMain.handle('shader:search', async (_event, query: string) => {
-    const mp = await resolveSelectedModpack()
-    if (!mp) throw new Error('modpackを選択してください')
-    return searchShaders(query, mp.mcVersion)
-  })
-
-  ipcMain.handle('shader:list', async () => {
-    const mp = await resolveSelectedModpack()
-    if (!mp) return []
-    const root = resolveInstanceRoot(loadStore().settings.instanceBaseDir, mp.id)
-    return listInstalledShaders(root)
-  })
-
-  ipcMain.handle('shader:install', async (_event, projectId: string) => {
-    const mp = await resolveSelectedModpack()
-    if (!mp) throw new Error('modpackを選択してください')
-    const root = resolveInstanceRoot(loadStore().settings.instanceBaseDir, mp.id)
-    const fileName = await installShader(root, projectId, mp.mcVersion)
-    sendLog(`シェーダー導入(${mp.id}): ${fileName}`)
-    return fileName
-  })
-
-  ipcMain.handle('shader:delete', async (_event, fileName: string) => {
-    const mp = await resolveSelectedModpack()
-    if (!mp) throw new Error('modpackを選択してください')
-    const root = resolveInstanceRoot(loadStore().settings.instanceBaseDir, mp.id)
-    await deleteShader(root, fileName)
-  })
-
-  ipcMain.handle('auth:login-microsoft', async () => {
-    const account: Account = await loginWithMicrosoft(mainWindow)
-    const status = await fetchPlayerStatus(account.uuid)
-    const data = loadStore()
-    data.account = account
-    saveStore(data)
-    return { mcid: account.name, uuid: account.uuid, needsDiscord: !status.registered }
-  })
-
-  ipcMain.handle('auth:login-discord', async () => {
-    const data = loadStore()
-    if (!data.account) throw new Error('先にMicrosoftでログインしてください')
-    const code = await getDiscordAuthCode()
-    const result = await submitDiscordCallback(
-      code,
-      data.account.uuid,
-      data.account.name,
-      data.account.accessToken,
-    )
-    data.discordId = result.discordId
-    data.discordName = result.discordName
-    saveStore(data)
-    return { discordId: result.discordId, discordName: result.discordName }
-  })
-
-  ipcMain.handle('app:get-account', () => {
-    const data = loadStore()
-    if (!data.account) return null
-    return {
-      mcid: data.account.name,
-      uuid: data.account.uuid,
-      discordLinked: !!data.discordId,
-      discordId: data.discordId ?? null,
-      discordName: data.discordName ?? null,
-    }
-  })
-
-  ipcMain.handle('app:get-settings', () => loadStore().settings)
-
-  ipcMain.handle('app:save-settings', (_event, settings: StoredData['settings']) => {
-    const data = loadStore()
-    data.settings = settings
-    saveStore(data)
-  })
-
-  ipcMain.handle('app:logout', () => {
-    const data = loadStore()
-    data.account = undefined
-    data.discordId = undefined
-    saveStore(data)
-  })
-
-  ipcMain.handle('play:start', async () => {
-    // 多重起動防止: 既に同期/起動処理中なら弾く。
-    if (gameRunning) throw new Error('すでに起動処理中です')
-    gameRunning = true
-
-    const data = loadStore()
-    if (!data.account) {
-      gameRunning = false
-      throw new Error('ログインしていません')
-    }
-
-    const modpack = await resolveSelectedModpack()
-    if (!modpack) {
-      gameRunning = false
-      throw new Error('参加できるmodpackがありません（管理者がmodpackを作成してください）')
-    }
-
-    let account = data.account
-    const refreshed = await refreshMicrosoftAccount(mainWindow, account)
-    if (refreshed !== account) {
-      account = refreshed
-      data.account = account
-      saveStore(data)
-    }
-
-    const instanceBaseDir = data.settings.instanceBaseDir
-    const instanceRoot = resolveInstanceRoot(instanceBaseDir, modpack.id)
-
-    const sendSync = (progress: SyncProgress) => {
-      mainWindow.webContents.send('play:sync-progress', progress)
-    }
-    const sendLaunch = (progress: LaunchProgress) => {
-      mainWindow.webContents.send('play:launch-progress', progress)
-    }
-
-    try {
-      sendLog(`[${modpack.name}] MOD同期を開始します`)
-      await syncMods(instanceRoot, modpack.id, (p) => {
-        if (p.phase === 'downloading') sendLog(`MOD DL: ${p.fileName} (${p.current}/${p.total})`)
-        else if (p.phase === 'deleting') sendLog(`不要MOD削除: ${p.fileName}`)
-        else if (p.phase === 'done') sendLog('MOD同期完了')
-        sendSync(p)
+function platform(logs: LogBuffer): Platform {
+  const window = () => {
+    if (!mainWindow) throw new Error('ウィンドウがありません')
+    return mainWindow
+  }
+  return {
+    version: app.getVersion(),
+    totalMemoryMb: totalMemoryMb(),
+    homeDir: os.homedir(),
+    async chooseDirectory() {
+      const result = await dialog.showOpenDialog(window(), {
+        title: 'ゲームデータの保存先',
+        properties: ['openDirectory', 'createDirectory'],
       })
-    } catch (err) {
-      sendLog(`MOD同期エラー: ${(err as Error).message}`)
-      sendSync({ phase: 'error', message: (err as Error).message })
-      gameRunning = false
-      throw err
-    }
-
-    // サーバーが設定されていれば Minecraft のサーバーリストへ自動登録
-    if (modpack.serverHost) {
-      try {
-        ensureServerRegistered(
-          instanceRoot,
-          modpack.serverHost,
-          modpack.serverPort ?? 25565,
-          modpack.serverName ?? modpack.name,
-        )
-        sendLog(`サーバーをリスト登録: ${modpack.serverHost}:${modpack.serverPort ?? 25565}`)
-      } catch (err) {
-        sendLog(`サーバーリスト登録に失敗（続行）: ${(err as Error).message}`)
-      }
-    }
-
-    try {
-      sendLog(`${modpack.loader} ${modpack.mcVersion} を起動します`)
-      await launchModpack(
-        {
-          account,
-          memoryMinMb: data.settings.memoryMinMb,
-          memoryMaxMb: data.settings.memoryMaxMb,
-          instanceBaseDir,
-          modpack,
-        },
-        (p) => {
-          if (p.phase === 'installing_loader') sendLog(`${modpack.loader}を準備中...`)
-          else if (p.phase === 'launching') sendLog('Minecraftを起動しました')
-          else if (p.phase === 'closed') sendLog(`Minecraftが終了しました (code=${p.code})`)
-          else if (p.phase === 'error') sendLog(`起動エラー: ${p.message}`)
-          sendLaunch(p)
-        },
-      )
-    } catch (err) {
-      sendLog(`起動エラー: ${(err as Error).message}`)
-      sendLaunch({ phase: 'error', message: (err as Error).message })
-      gameRunning = false
-      throw err
-    } finally {
-      gameRunning = false
-    }
-  })
-
-  ipcMain.handle('app:get-server-info', () => config.mcServer)
-
-  // --- 初回セットアップ / 保存先選択 ---
-  // 表示用の基点（modpack ごとに <base>/.r-launcher/<id> が作られる）。
-  const rootName = sanitizeRootName(INSTANCE_ROOT_NAME)
-  const rootFolderName = process.platform === 'darwin' ? rootName : `.${rootName}`
-  const displayRoot = (baseDir: string) => path.join(baseDir, rootFolderName, '<modpackごと>')
-
-  ipcMain.handle('setup:get-state', () => {
-    const data = loadStore()
-    return {
-      setupCompleted: !!data.setupCompleted,
-      instanceBaseDir: data.settings.instanceBaseDir,
-      instanceRoot: displayRoot(data.settings.instanceBaseDir),
-    }
-  })
-
-  // フォルダ選択ダイアログを開き、選ばれた親フォルダを保存（実データは配下の .r-launcher）。
-  ipcMain.handle('setup:choose-folder', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: 'ゲームデータの保存先フォルダを選択',
-      properties: ['openDirectory', 'createDirectory'],
-    })
-    if (result.canceled || result.filePaths.length === 0) return null
-    const baseDir = result.filePaths[0]
-    const data = loadStore()
-    data.settings.instanceBaseDir = baseDir
-    saveStore(data)
-    return { instanceBaseDir: baseDir, instanceRoot: displayRoot(baseDir) }
-  })
-
-  // 初回セットアップを完了扱いにする（既定のまま進んだ場合も含む）。
-  ipcMain.handle('setup:complete', () => {
-    const data = loadStore()
-    data.setupCompleted = true
-    saveStore(data)
-  })
-
-  // --- 管理者機能 ---
-  function requireToken(): string {
-    const data = loadStore()
-    if (!data.account) throw new Error('ログインしていません')
-    return data.account.accessToken
+      return result.canceled ? null : (result.filePaths[0] ?? null)
+    },
+    async chooseFile(kind) {
+      const result = await dialog.showOpenDialog(window(), {
+        title: kind === 'image' ? '背景にする画像' : 'Java の実行ファイル（java.exe / javaw.exe）',
+        properties: ['openFile'],
+        filters:
+          kind === 'image'
+            ? [{ name: '画像', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+            : process.platform === 'win32'
+              ? [{ name: 'Java', extensions: ['exe'] }]
+              : [],
+      })
+      return result.canceled ? null : (result.filePaths[0] ?? null)
+    },
+    copyText: (text) => clipboard.writeText(text),
+    async saveText(defaultName, text) {
+      const result = await dialog.showSaveDialog(window(), {
+        defaultPath: defaultName,
+        filters: [{ name: 'テキスト', extensions: ['txt'] }],
+      })
+      if (result.canceled || !result.filePath) return false
+      await writeFile(result.filePath, text, 'utf-8')
+      return true
+    },
+    async openPath(target) {
+      const error = await shell.openPath(target)
+      if (error) throw new Error('フォルダを開けませんでした')
+    },
+    openExternal: (url) => shell.openExternal(url),
+    trash: (target) => shell.trashItem(target),
+    login: () => loginWithMicrosoft(window()),
+    refresh: (account) => refreshMicrosoftAccount(window(), account),
+    ping: (host, port) => pingServer(host, port, { timeoutMs: 5000 }),
   }
+}
 
-  ipcMain.handle('admin:check', async () => {
-    const data = loadStore()
-    if (!data.account) return { isAdmin: false, isMaster: false }
-    // MSトークンは数時間〜24hで失効する。失効した token のまま /admin/check すると
-    // Minecraft profile 取得に失敗し「管理者でない」と誤判定されるため、先にリフレッシュする。
-    // （requireToken を使う後続の管理者操作もこの更新後 token を読むので恩恵を受ける）
-    try {
-      const refreshed = await refreshMicrosoftAccount(mainWindow, data.account)
-      if (refreshed !== data.account) {
-        data.account = refreshed
-        saveStore(data)
-      }
-    } catch (err) {
-      sendLog(`トークン更新に失敗（再ログインが必要かもしれません）: ${(err as Error).message}`)
-    }
-    return adminCheck(loadStore().account!.accessToken)
+function start() {
+  const userData = app.getPath('userData')
+  const logs = new LogBuffer(path.join(userData, 'logs'))
+  const backgroundsDir = path.join(userData, 'backgrounds')
+  const store = new Store(userData, {
+    available: () => safeStorage.isEncryptionAvailable(),
+    encrypt: (plain) => safeStorage.encryptString(plain).toString('base64'),
+    decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+  })
+  const http = createHttp({
+    userAgent: config.userAgent,
+    allowHttpLocalhost: config.allowHttpLocalhost,
+  })
+  const addons = new Addons(http, (file) => shell.trashItem(file))
+  const service = new LauncherService({
+    store,
+    http,
+    addons,
+    logs,
+    platform: platform(logs),
+    backgroundsDir,
+  })
+  const features = new Features(service)
+  const rpc = new DiscordRpc({ clientId: config.discordAppId })
+
+  protocol.handle('rl-bg', (request) => {
+    const file = resolveBackgroundRequest(request.url, backgroundsDir)
+    if (!file) return new Response('Not found', { status: 404 })
+    return net.fetch(pathToFileURL(file).toString())
   })
 
-  // 管理者アカウント管理（マスターのみ）
-  ipcMain.handle('admin:list-admins', async () => {
-    return adminListAdmins(requireToken())
-  })
+  logs.onLine((line) => send('logs:line', line))
+  logs.write('launcher', `R-Launcher ${app.getVersion()} を起動しました`)
 
-  ipcMain.handle('admin:add-admin', async (_event, mcid: string) => {
-    const result = await adminAddAdmin(requireToken(), mcid)
-    sendLog(`管理者を追加: ${result.added.mcid} (${result.added.uuid})`)
-    return result
-  })
-
-  ipcMain.handle('admin:remove-admin', async (_event, uuid: string) => {
-    const result = await adminRemoveAdmin(requireToken(), uuid)
-    sendLog(`管理者を削除: ${uuid}`)
-    return result
-  })
-
-  // modpack CRUD（管理者）
-  ipcMain.handle('admin:list-modpacks', async () => {
-    return adminListModpacks(requireToken())
-  })
-
-  ipcMain.handle(
-    'admin:create-modpack',
-    async (
-      _event,
-      mp: {
-        id: string
-        name: string
-        loader: LoaderType
-        mcVersion: string
-        loaderVersion: string
-      },
-    ) => {
-      const modpacks = await adminCreateModpack(requireToken(), mp)
-      sendLog(`modpack作成: ${mp.id} (${mp.loader} ${mp.mcVersion})`)
-      return modpacks
+  register(
+    ipcMain,
+    {
+      service,
+      features,
+      isTrustedSender,
+      installUpdate: () => quitAndInstall(),
+      login: () => service.login(),
+      play: (serverId, force) =>
+        play(
+          {
+            service,
+            launch: launchGame,
+            onPhase: (phase) => send('play:progress', phase),
+            onRunning: (name) => {
+              if (!service.settings.discordRichPresence) return
+              void rpc
+                .connect()
+                .then((ok) =>
+                  ok
+                    ? rpc.setActivity({
+                        details: name,
+                        state: 'プレイ中',
+                        startTimestamp: Date.now(),
+                      })
+                    : false,
+                )
+            },
+            onExit: () => {
+              void rpc.setActivity(null)
+              send('play:progress', { phase: 'closed', code: null })
+            },
+          },
+          serverId,
+          force,
+        ),
     },
+    (text) => logs.write('launcher', text),
   )
 
-  ipcMain.handle(
-    'admin:update-modpack',
-    async (
-      _event,
-      modpackId: string,
-      patch: Partial<{
-        name: string
-        loader: LoaderType
-        mcVersion: string
-        loaderVersion: string
-      }>,
-    ) => {
-      const mp = await adminUpdateModpack(requireToken(), modpackId, patch)
-      sendLog(`modpack更新: ${modpackId}`)
-      return mp
-    },
-  )
+  hardenWebContents()
+  createWindow()
+  initAutoUpdater(() => mainWindow)
+}
 
-  ipcMain.handle('admin:delete-modpack', async (_event, modpackId: string) => {
-    const modpacks = await adminDeleteModpack(requireToken(), modpackId)
-    sendLog(`modpack削除: ${modpackId}`)
-    return modpacks
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow?.isMinimized()) mainWindow.restore()
+    mainWindow?.focus()
   })
-
-  // MOD 管理（指定 modpack）
-  ipcMain.handle('admin:list-mods', async (_event, modpackId: string) => {
-    return adminListMods(requireToken(), modpackId)
-  })
-
-  // ステップ1: ファイル選択ダイアログで複数の jar を選び、一覧（パス・名前・サイズ）を返す。
-  ipcMain.handle('admin:pick-mods', async () => {
-    requireToken()
-    const result = await dialog.showOpenDialog(mainWindow, {
-      title: 'アップロードするMOD (.jar) を選択（複数可）',
-      properties: ['openFile', 'multiSelections'],
-      filters: [{ name: 'Minecraft MOD', extensions: ['jar'] }],
-    })
-    if (result.canceled || result.filePaths.length === 0) return []
-    const files = []
-    for (const filePath of result.filePaths) {
-      const info = await stat(filePath)
-      files.push({ path: filePath, fileName: path.basename(filePath), size: info.size })
-    }
-    return files
-  })
-
-  // ステップ2: 選択済みの複数 jar を順にアップロードし、都度進捗を送る。
-  ipcMain.handle(
-    'admin:upload-mods',
-    async (_event, modpackId: string, paths: string[], side: ModSide) => {
-      const token = requireToken()
-      let mods = null
-      const total = paths.length
-      for (let i = 0; i < paths.length; i++) {
-        const filePath = paths[i]
-        const fileName = path.basename(filePath)
-        mainWindow.webContents.send('admin:upload-progress', { fileName, index: i + 1, total })
-        sendLog(`MODアップロード(${modpackId}/${side}): ${fileName} (${i + 1}/${total})`)
-        const buf = await readFile(filePath)
-        mods = await adminUpload(token, modpackId, fileName, side, buf.toString('base64'))
-      }
-      return mods
-    },
-  )
-
-  ipcMain.handle(
-    'admin:delete',
-    async (_event, modpackId: string, fileName: string, side: ModSide) => {
-      return adminDelete(requireToken(), modpackId, fileName, side)
-    },
-  )
-
-  ipcMain.handle('admin:regenerate', async (_event, modpackId: string) => {
-    return adminRegenerate(requireToken(), modpackId)
-  })
-
-  // Modrinth 検索・ワンクリック導入
-  ipcMain.handle('admin:modrinth-search', async (_event, modpackId: string, query: string) => {
-    return modrinthSearch(requireToken(), modpackId, query)
-  })
-
-  ipcMain.handle(
-    'admin:modrinth-install',
-    async (_event, modpackId: string, projectId: string, side: ModSide) => {
-      const result = await modrinthInstall(requireToken(), modpackId, projectId, side)
-      sendLog(`Modrinth導入(${modpackId}/${side}): ${result.installed.join(', ')}`)
-      return result
-    },
-  )
-})
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
+  void app.whenReady().then(start)
+  app.on('window-all-closed', () => app.quit())
+}

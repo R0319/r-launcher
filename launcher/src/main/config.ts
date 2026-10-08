@@ -1,18 +1,20 @@
+// 配布版に焼き込む値。開発時は .env で上書きできる（.env は配布物に含めない）。
 import 'dotenv/config'
 
+const env = (name: string) => {
+  const value = process.env[name]?.trim()
+  return value ? value : undefined
+}
+
 export const config = {
-  // 既定は本番(EC2/HTTPS)。開発時は .env の API_BASE_URL=http://localhost:3000 で上書きする。
-  // 配布 .exe は .env を同梱しないため、この既定がそのまま使われる。
-  apiBaseUrl: process.env.API_BASE_URL ?? 'https://52.194.80.48.sslip.io',
-  discord: {
-    // Client ID は公開情報。配布版でも使えるよう既定に焼き込む（Secret はサーバーのみが持つ）。
-    clientId: process.env.DISCORD_CLIENT_ID ?? '1522932897013563523',
-    // redirect_uri はランチャーが横取りするだけで実遷移しない。Discord Portal 登録値と一致必須。
-    redirectUri: process.env.DISCORD_REDIRECT_URI ?? 'http://localhost:3000/auth/discord/callback',
-    scope: process.env.DISCORD_OAUTH_SCOPE ?? 'identify',
-  },
-  mcServer: {
-    host: process.env.MC_SERVER_HOST ?? '',
-    port: Number(process.env.MC_SERVER_PORT ?? 25565),
-  },
+  /**
+   * Microsoft ログインの Client ID。未設定なら eml-lib の既定（公式ランチャーの ID）を使う。
+   * 自前の Azure アプリを Mojang の審査（aka.ms/mce-reviewappid）に通したら、ここに入れて切り替える。
+   */
+  msaClientId: env('MSA_CLIENT_ID'),
+  /** Discord のアプリ ID（Rich Presence 用。公開情報） */
+  discordAppId: env('DISCORD_APP_ID') ?? '1522932897013563523',
+  /** 開発用に http://localhost の Panel を許すか（配布版では常に false） */
+  allowHttpLocalhost: env('ALLOW_HTTP_LOCALHOST') === '1',
+  userAgent: 'R0319/r-launcher/2.0 (+https://github.com/R0319/r-launcher)',
 }
