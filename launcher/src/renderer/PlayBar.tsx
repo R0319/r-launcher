@@ -25,6 +25,14 @@ export function phaseText(phase: PlayPhase | undefined): string {
   }
 }
 
+/** 何もしていないときに、押すと何が起きるかを書く */
+export function idleText(server: ServerView): string {
+  if (server.state !== 'running') return 'サーバーが動いているときに遊べます'
+  return server.installed
+    ? 'サーバーと同じ構成か確かめてから起動します'
+    : 'Mod とゲーム本体をダウンロードしてから起動します（初回は数分かかります）'
+}
+
 function progressOf(phase: PlayPhase | undefined): number | null {
   if (!phase) return null
   if (phase.phase === 'mods' && phase.total) return phase.done / phase.total
@@ -123,7 +131,8 @@ export function PlayBar(props: {
           {error ? (
             <span className="error-text">{error}</span>
           ) : (
-            phaseText(busy || running ? phase : phase?.phase === 'closed' ? phase : undefined)
+            phaseText(busy || running ? phase : phase?.phase === 'closed' ? phase : undefined) ||
+            idleText(props.server)
           )}
         </div>
         <button

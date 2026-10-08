@@ -77,13 +77,37 @@ describe('store', () => {
         account,
       }),
     )
-    const data = new Store(dir, cipher).load()
+    // 本物の safeStorage と同じく、暗号化していない値の復号は失敗する
+    const strict: Cipher = {
+      available: () => true,
+      encrypt: (v) => `v1enc-${v}`,
+      decrypt: (v) => {
+        if (!v.startsWith('v1enc-')) throw new Error('not encrypted')
+        return v.slice(6)
+      },
+    }
+    const data = new Store(dir, strict).load()
     expect(data).toMatchObject({
       setupCompleted: true,
       settings: { instanceBaseDir: 'C:\\Games', java: { memoryMinMb: 2048, memoryMaxMb: 8192 } },
       discord: { name: 'old-discord' },
       account: null,
     })
+    // v1 が暗号化して保存したアカウントは引き継ぐ（更新後にログインし直さなくてよい）
+    writeFileSync(
+      path.join(dir, 'store.json'),
+      JSON.stringify({
+        setupCompleted: true,
+        account: {
+          ...account,
+          accessToken: 'v1enc-secret-access',
+          refreshToken: 'v1enc-secret-refresh',
+          clientToken: 'v1enc-secret-client',
+        },
+      }),
+    )
+    expect(new Store(dir, strict).load().account).toEqual(account)
+    expect(new Store(dir, { ...strict, available: () => false }).load().account).toBeNull()
   })
   it.each(['{broken', 'null', '[]'])('壊れた保存データ %s は初期値で続ける', (raw) => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -250,5 +274,22 @@ describe('静的セキュリティ', () => {
     for (const option of ['contextIsolation: true', 'nodeIntegration: false', 'sandbox: true'])
       expect(source).toContain(option)
     expect(source).toMatch(/setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/)
+  })
+})
+
+describe('panelProblem', () => {
+  it('tells the user what to check, with the panel host', async () => {
+    const { panelProblem } = await import('./service')
+    const url = 'https://panel.example.jp'
+    expect(panelProblem(new Error('通信に失敗しました'), url)).toBe(
+      'Panel（panel.example.jp）につながりません。インターネット接続と、設定の「Panel の URL」を確かめてください',
+    )
+    expect(panelProblem(Object.assign(new Error('x'), { status: 404 }), url)).toContain(
+      '一覧がありません',
+    )
+    expect(panelProblem(Object.assign(new Error('x'), { status: 503 }), url)).toContain(
+      'しばらくしてから',
+    )
+    expect(panelProblem(new Error('応答の形が想定と違います'), url)).toContain('最新版に更新')
   })
 })

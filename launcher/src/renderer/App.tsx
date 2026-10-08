@@ -109,11 +109,34 @@ export function App() {
             />
           ) : (
             <div className="main-scroll">
-              <p className="empty">
-                {servers && !serversError
-                  ? '公開中のサーバーはありません。'
-                  : '左の一覧からサーバーを選んでください。'}
-              </p>
+              <div className="page">
+                {serversError ? (
+                  <div className="notice danger" role="alert">
+                    {serversError}
+                    <div className="actions">
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => void reload()}
+                        disabled={loading}
+                      >
+                        再読み込み
+                      </button>
+                      <button
+                        type="button"
+                        className="btn quiet"
+                        onClick={() => setView({ kind: 'settings' })}
+                      >
+                        設定を開く
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="empty">
+                    {servers ? '公開中のサーバーはありません。' : '読み込み中…'}
+                  </p>
+                )}
+              </div>
             </div>
           ))}
       </main>

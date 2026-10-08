@@ -47,7 +47,7 @@ export class Store {
       return {
         setupCompleted: old.setupCompleted ?? false,
         settings: old.settings ?? parseSettings({}),
-        account: this.memoryAccount,
+        account: this.memoryAccount ?? this.decodeV1Account(raw.account),
         discord: old.discord ?? null,
       }
     }
@@ -100,6 +100,27 @@ export class Store {
       if (typeof value === 'string' && value) copy[field] = `enc:${this.cipher.encrypt(value)}`
     }
     return copy
+  }
+
+  /**
+   * v1 は safeStorage で暗号化した base64 を（印なしで）保存していた。復号できたものだけ引き継ぎ、
+   * 復号できない値（v1 が暗号化できずに平文で保存したもの）は信用せず捨てて、ログインし直してもらう
+   */
+  private decodeV1Account(raw: unknown): Account | null {
+    if (!raw || typeof raw !== 'object' || !this.cipher.available()) return null
+    const copy: Record<string, unknown> = { ...(raw as Record<string, unknown>) }
+    if (typeof copy.name !== 'string' || typeof copy.uuid !== 'string') return null
+    if (typeof copy.accessToken !== 'string' || !copy.accessToken) return null
+    for (const field of TOKEN_FIELDS) {
+      const value = copy[field]
+      if (typeof value !== 'string' || !value) continue
+      try {
+        copy[field] = this.cipher.decrypt(value)
+      } catch {
+        return null
+      }
+    }
+    return copy as unknown as Account
   }
 
   private decodeAccount(raw: unknown): Account | null {

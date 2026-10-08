@@ -15,8 +15,9 @@ import {
   shell,
   type IpcMainInvokeEvent,
 } from 'electron'
-import { writeFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { Addons } from './addons'
+import { APP_INDEX, resolveAppRequest } from './appProtocol'
 import { resolveBackgroundRequest } from './background'
 import { config } from './config'
 import { DiscordRpc } from './discordRpc'
@@ -33,6 +34,7 @@ import { Store } from './store'
 import { initAutoUpdater, quitAndInstall } from './updater'
 
 protocol.registerSchemesAsPrivileged([
+  { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
   { scheme: 'rl-bg', privileges: { standard: true, secure: true, supportFetchAPI: false } },
 ])
 app.enableSandbox()
@@ -40,8 +42,8 @@ app.enableSandbox()
 if (!app.isPackaged) app.setPath('userData', path.join(app.getPath('appData'), 'r-launcher-dev'))
 
 let mainWindow: BrowserWindow | undefined
-const rendererIndex = path.join(__dirname, '..', 'renderer', 'index.html')
-const rendererUrl = pathToFileURL(rendererIndex).toString()
+const rendererDir = path.join(__dirname, '..', 'renderer')
+const rendererUrl = APP_INDEX
 
 function send(channel: string, value: unknown) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, value)
@@ -66,7 +68,7 @@ function createWindow() {
     },
   })
   mainWindow.setMenuBarVisibility(false)
-  void mainWindow.loadFile(rendererIndex)
+  void mainWindow.loadURL(rendererUrl)
 }
 
 /** 画面（main ウィンドウの、自分の index.html）からの呼び出しだけを受け付ける */
@@ -175,6 +177,13 @@ function start() {
   const features = new Features(service)
   const rpc = new DiscordRpc({ clientId: config.discordAppId })
 
+  protocol.handle('app', async (request) => {
+    const target = resolveAppRequest(request.url, rendererDir)
+    if (!target) return new Response('Not found', { status: 404 })
+    const body = await readFile(target.file).catch(() => null)
+    if (!body) return new Response('Not found', { status: 404 })
+    return new Response(body, { headers: { 'Content-Type': target.type } })
+  })
   protocol.handle('rl-bg', (request) => {
     const file = resolveBackgroundRequest(request.url, backgroundsDir)
     if (!file) return new Response('Not found', { status: 404 })

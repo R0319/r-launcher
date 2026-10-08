@@ -146,7 +146,12 @@ export class LauncherService {
   }
 
   async listServers(): Promise<ServerView[]> {
-    this.packs = await this.panel().listPacks()
+    const panel = this.panel()
+    try {
+      this.packs = await panel.listPacks()
+    } catch (error) {
+      throw new Error(panelProblem(error, this.settings.panelUrl))
+    }
     const base = this.settings.instanceBaseDir
     return this.packs.map((pack) => ({
       ...pack,
@@ -279,6 +284,25 @@ export class LauncherService {
     }
     return this.detail(serverId)
   }
+}
+
+/** Panel につながらないときの、利用者が次に何をすればよいかが分かる文 */
+export function panelProblem(error: unknown, panelUrl: string): string {
+  let host = panelUrl
+  try {
+    host = new URL(panelUrl).host
+  } catch {
+    // URL として読めなければそのまま出す
+  }
+  const status = (error as { status?: number }).status
+  if (status === 404)
+    return `Panel（${host}）にサーバーの一覧がありません。設定の「Panel の URL」を確かめてください`
+  if (status && status >= 500)
+    return `Panel（${host}）が応答できない状態です。しばらくしてから再読み込みしてください`
+  if (error instanceof Error && error.message.includes('応答の形')) {
+    return `Panel（${host}）の応答を読めません。ランチャーを最新版に更新してください`
+  }
+  return `Panel（${host}）につながりません。インターネット接続と、設定の「Panel の URL」を確かめてください`
 }
 
 /** Iris / Oculus の設定ファイル名。どちらも無ければシェーダーは使えない */

@@ -49,7 +49,7 @@ export function Rail(props: {
       </div>
       <div className="rail-label">サーバー</div>
       <ul className="server-list">
-        {props.error && <li className="account-line error-text">{props.error}</li>}
+        {props.error && <li className="account-line error-text">読み込めませんでした</li>}
         {!props.servers && !props.error && <li className="account-line">読み込み中…</li>}
         {props.servers?.map((server) => (
           <li key={server.id}>
