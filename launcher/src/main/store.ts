@@ -1,86 +1,147 @@
-import { app, safeStorage } from 'electron'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
+// 設定とアカウントの保存。アカウントのトークンは OS の暗号化（safeStorage）を通してから書く。
+// 暗号化が使えない環境では、トークンをディスクに書かない（起動のたびにログインし直す）。
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { Account } from 'eml-lib'
+import { parseSettings, type Settings } from '../shared/settings'
+
+export interface Cipher {
+  available(): boolean
+  encrypt(plain: string): string
+  decrypt(cipher: string): string
+}
 
 export interface StoredData {
-  account?: Account
-  discordId?: string
-  discordName?: string
-  // 初回セットアップ（保存先の選択）が完了したか。false の間は初回セットアップ画面を出す。
-  setupCompleted?: boolean
-  // 最後に選択した modpack の id（次回起動時に復元）。
-  selectedModpackId?: string
-  settings: {
-    memoryMaxMb: number
-    memoryMinMb: number
-    // ゲームデータの親フォルダ。実際のゲームルートは <instanceBaseDir>/.r-launcher。
-    // 既定は本来の %APPDATA%（一般的なMinecraftランチャーと同じ場所）。
-    instanceBaseDir: string
-    logDir: string
+  setupCompleted: boolean
+  settings: Settings
+  account: Account | null
+  discord: { name: string } | null
+}
+
+interface RawFile {
+  version?: unknown
+  setupCompleted?: unknown
+  settings?: unknown
+  account?: unknown
+  discord?: unknown
+}
+
+const TOKEN_FIELDS = ['accessToken', 'refreshToken', 'clientToken'] as const
+
+export class Store {
+  private memoryAccount: Account | null = null
+
+  constructor(
+    private readonly dir: string,
+    private readonly cipher: Cipher,
+  ) {}
+
+  private get file() {
+    return path.join(this.dir, 'store.json')
   }
-}
 
-function defaultData(): StoredData {
-  return {
-    setupCompleted: false,
-    settings: {
-      memoryMaxMb: 4096,
-      memoryMinMb: 512,
-      instanceBaseDir: app.getPath('appData'),
-      logDir: path.join(app.getPath('userData'), 'logs'),
-    },
-  }
-}
-
-function storeFilePath(): string {
-  return path.join(app.getPath('userData'), 'store.json')
-}
-
-// Microsoft/Discord トークンは safeStorage（OSキーチェーン連携）で暗号化してから
-// JSONに保存する。平文でディスクに置かない（仕様書 8. セキュリティ）。
-function encrypt(value: string): string {
-  if (!safeStorage.isEncryptionAvailable()) return value
-  return safeStorage.encryptString(value).toString('base64')
-}
-
-function decrypt(value: string): string {
-  if (!safeStorage.isEncryptionAvailable()) return value
-  try {
-    return safeStorage.decryptString(Buffer.from(value, 'base64'))
-  } catch {
-    return value
-  }
-}
-
-export function loadStore(): StoredData {
-  const file = storeFilePath()
-  if (!existsSync(file)) return defaultData()
-  try {
-    const raw = JSON.parse(readFileSync(file, 'utf-8')) as StoredData
-    if (raw.account) {
-      raw.account.accessToken = decrypt(raw.account.accessToken)
-      if (raw.account.refreshToken) raw.account.refreshToken = decrypt(raw.account.refreshToken)
+  load(): StoredData {
+    const raw = this.readRaw()
+    if (raw.version !== 2) {
+      const old = migrateV1(raw as Record<string, unknown>)
+      return {
+        setupCompleted: old.setupCompleted ?? false,
+        settings: old.settings ?? parseSettings({}),
+        account: this.memoryAccount,
+        discord: old.discord ?? null,
+      }
     }
-    return { ...defaultData(), ...raw, settings: { ...defaultData().settings, ...raw.settings } }
-  } catch {
-    return defaultData()
+    return {
+      setupCompleted: raw.setupCompleted === true,
+      settings: parseSettings(raw.settings),
+      account: this.memoryAccount ?? this.decodeAccount(raw.account),
+      discord: decodeDiscord(raw.discord),
+    }
+  }
+
+  save(data: StoredData): void {
+    // 暗号化できないときはメモリにだけ持つ
+    this.memoryAccount = this.cipher.available() ? null : data.account
+    const out = {
+      version: 2,
+      setupCompleted: data.setupCompleted,
+      settings: data.settings,
+      account: this.cipher.available() ? this.encodeAccount(data.account) : null,
+      discord: data.discord,
+    }
+    mkdirSync(this.dir, { recursive: true })
+    const tmp = `${this.file}.tmp`
+    writeFileSync(tmp, JSON.stringify(out, null, 2), { encoding: 'utf-8', mode: 0o600 })
+    renameSync(tmp, this.file)
+  }
+
+  update(fn: (data: StoredData) => StoredData): StoredData {
+    const next = fn(this.load())
+    this.save(next)
+    return next
+  }
+
+  private readRaw(): RawFile {
+    if (!existsSync(this.file)) return {}
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(this.file, 'utf-8'))
+      return parsed && typeof parsed === 'object' ? (parsed as RawFile) : {}
+    } catch (error) {
+      console.error('[store] store.json を読めません。初期値で続けます', (error as Error).message)
+      return {}
+    }
+  }
+
+  private encodeAccount(account: Account | null): unknown {
+    if (!account) return null
+    const copy: Record<string, unknown> = { ...account }
+    for (const field of TOKEN_FIELDS) {
+      const value = copy[field]
+      if (typeof value === 'string' && value) copy[field] = `enc:${this.cipher.encrypt(value)}`
+    }
+    return copy
+  }
+
+  private decodeAccount(raw: unknown): Account | null {
+    if (!raw || typeof raw !== 'object') return null
+    const copy: Record<string, unknown> = { ...(raw as Record<string, unknown>) }
+    if (typeof copy.name !== 'string' || typeof copy.uuid !== 'string') return null
+    for (const field of TOKEN_FIELDS) {
+      const value = copy[field]
+      if (typeof value !== 'string' || !value) continue
+      // 旧版（v1）は暗号化できない環境で平文を保存していた。平文のトークンは信用せず捨てる
+      if (!value.startsWith('enc:') || !this.cipher.available()) return null
+      try {
+        copy[field] = this.cipher.decrypt(value.slice(4))
+      } catch {
+        return null
+      }
+    }
+    return copy as unknown as Account
   }
 }
 
-export function saveStore(data: StoredData): void {
-  const dir = app.getPath('userData')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+function decodeDiscord(raw: unknown): { name: string } | null {
+  if (!raw || typeof raw !== 'object') return null
+  const name = (raw as { name?: unknown }).name
+  return typeof name === 'string' && name.length <= 100 ? { name } : null
+}
 
-  const toSave: StoredData = {
-    ...data,
-    account: data.account
-      ? {
-          ...data.account,
-          accessToken: encrypt(data.account.accessToken),
-          refreshToken: data.account.refreshToken ? encrypt(data.account.refreshToken) : undefined,
-        }
-      : undefined,
+/** v1（r-launcher 1.x）の store.json から引き継げるものを読む */
+export function migrateV1(raw: Record<string, unknown>): Partial<StoredData> {
+  const settings = raw.settings as Record<string, unknown> | undefined
+  const out: Partial<StoredData> = {}
+  if (raw.setupCompleted === true) out.setupCompleted = true
+  if (settings && typeof settings === 'object') {
+    const java: Record<string, unknown> = {}
+    if (typeof settings.memoryMaxMb === 'number') java.memoryMaxMb = settings.memoryMaxMb
+    if (typeof settings.memoryMinMb === 'number') java.memoryMinMb = settings.memoryMinMb
+    out.settings = parseSettings({
+      instanceBaseDir:
+        typeof settings.instanceBaseDir === 'string' ? settings.instanceBaseDir : null,
+      java,
+    })
   }
-  writeFileSync(storeFilePath(), JSON.stringify(toSave, null, 2), 'utf-8')
+  if (typeof raw.discordName === 'string') out.discord = { name: raw.discordName }
+  return out
 }

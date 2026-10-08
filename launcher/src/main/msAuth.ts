@@ -9,7 +9,10 @@ export async function loginWithMicrosoft(mainWindow: BrowserWindow): Promise<Acc
   return auth.auth()
 }
 
-export async function refreshMicrosoftAccount(mainWindow: BrowserWindow, account: Account): Promise<Account> {
+export async function refreshMicrosoftAccount(
+  mainWindow: BrowserWindow,
+  account: Account,
+): Promise<Account> {
   const auth = new EMLLib.MicrosoftAuth(mainWindow)
   const valid = await auth.validate(account)
   if (valid) return account

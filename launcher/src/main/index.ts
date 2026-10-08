@@ -105,7 +105,8 @@ app.whenReady().then(() => {
   ipcMain.handle('modpack:list', async () => {
     const modpacks = await fetchModpacks()
     const data = loadStore()
-    const selectedId = modpacks.find((m) => m.id === data.selectedModpackId)?.id ?? modpacks[0]?.id ?? null
+    const selectedId =
+      modpacks.find((m) => m.id === data.selectedModpackId)?.id ?? modpacks[0]?.id ?? null
     return { modpacks, selectedId }
   })
 
@@ -296,8 +297,7 @@ app.whenReady().then(() => {
   // 表示用の基点（modpack ごとに <base>/.r-launcher/<id> が作られる）。
   const rootName = sanitizeRootName(INSTANCE_ROOT_NAME)
   const rootFolderName = process.platform === 'darwin' ? rootName : `.${rootName}`
-  const displayRoot = (baseDir: string) =>
-    path.join(baseDir, rootFolderName, '<modpackごと>')
+  const displayRoot = (baseDir: string) => path.join(baseDir, rootFolderName, '<modpackごと>')
 
   ipcMain.handle('setup:get-state', () => {
     const data = loadStore()
@@ -380,7 +380,13 @@ app.whenReady().then(() => {
     'admin:create-modpack',
     async (
       _event,
-      mp: { id: string; name: string; loader: LoaderType; mcVersion: string; loaderVersion: string },
+      mp: {
+        id: string
+        name: string
+        loader: LoaderType
+        mcVersion: string
+        loaderVersion: string
+      },
     ) => {
       const modpacks = await adminCreateModpack(requireToken(), mp)
       sendLog(`modpack作成: ${mp.id} (${mp.loader} ${mp.mcVersion})`)
@@ -393,7 +399,12 @@ app.whenReady().then(() => {
     async (
       _event,
       modpackId: string,
-      patch: Partial<{ name: string; loader: LoaderType; mcVersion: string; loaderVersion: string }>,
+      patch: Partial<{
+        name: string
+        loader: LoaderType
+        mcVersion: string
+        loaderVersion: string
+      }>,
     ) => {
       const mp = await adminUpdateModpack(requireToken(), modpackId, patch)
       sendLog(`modpack更新: ${modpackId}`)
@@ -448,9 +459,12 @@ app.whenReady().then(() => {
     },
   )
 
-  ipcMain.handle('admin:delete', async (_event, modpackId: string, fileName: string, side: ModSide) => {
-    return adminDelete(requireToken(), modpackId, fileName, side)
-  })
+  ipcMain.handle(
+    'admin:delete',
+    async (_event, modpackId: string, fileName: string, side: ModSide) => {
+      return adminDelete(requireToken(), modpackId, fileName, side)
+    },
+  )
 
   ipcMain.handle('admin:regenerate', async (_event, modpackId: string) => {
     return adminRegenerate(requireToken(), modpackId)

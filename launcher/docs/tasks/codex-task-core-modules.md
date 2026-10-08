@@ -11,10 +11,14 @@ R-Launcher v2（Electron）の main プロセスで使う、Electron に依存�
 
 ```ts
 export type MaskKind = 'token' | 'uuid' | 'player' | 'path' | 'ip' | 'email' | 'discord'
-export function maskLog(text: string, ctx?: { names?: string[]; homeDir?: string }): { text: string; counts: Record<MaskKind, number> }
+export function maskLog(
+  text: string,
+  ctx?: { names?: string[]; homeDir?: string },
+): { text: string; counts: Record<MaskKind, number> }
 ```
 
 隠すもの（置き換え後の文字列も固定にする）:
+
 - トークン類 → `<token>`: `--accessToken <値>`、`"accessToken":"…"`、`accessToken=…`、`Bearer …`、JWT 形式（`eyJ…​.…​.…`）、`Session ID is token:…`、`--clientId <値>`、`--xuid <値>`、`xuid=…`、Discord のボットトークン形式。
 - UUID（ハイフンあり・なしの 32 桁 16 進）→ `<uuid>`。
 - `ctx.names`（プレイヤー名など、大文字小文字を区別せず単語として一致）→ `<player>`。`Setting user: 名前`、`--username 名前` も。
@@ -27,8 +31,23 @@ export function maskLog(text: string, ctx?: { names?: string[]; homeDir?: string
 ## 2. `src/main/serverPing.ts` — サーバーの状態（Server List Ping）
 
 ```ts
-export interface PingResult { online: number; max: number; motd: string; version: string; protocol: number; latencyMs: number }
-export async function pingServer(host: string, port: number, opts?: { timeoutMs?: number; resolveSrv?: (host: string) => Promise<{ name: string; port: number } | null>; connect?: typeof net.connect }): Promise<PingResult>
+export interface PingResult {
+  online: number
+  max: number
+  motd: string
+  version: string
+  protocol: number
+  latencyMs: number
+}
+export async function pingServer(
+  host: string,
+  port: number,
+  opts?: {
+    timeoutMs?: number
+    resolveSrv?: (host: string) => Promise<{ name: string; port: number } | null>
+    connect?: typeof net.connect
+  },
+): Promise<PingResult>
 ```
 
 - 1.7 以降の Status プロトコル（Handshake next state 1 → Status Request → Status Response の JSON → Ping/Pong で遅延）。VarInt の読み書き、分割された受信、応答の上限 64KB、既定タイムアウト 5 秒。
@@ -39,11 +58,21 @@ export async function pingServer(host: string, port: number, opts?: { timeoutMs?
 ## 3. `src/main/discordRpc.ts` — Discord Rich Presence
 
 ```ts
-export interface Activity { details?: string; state?: string; startTimestamp?: number; largeImageKey?: string; largeImageText?: string }
+export interface Activity {
+  details?: string
+  state?: string
+  startTimestamp?: number
+  largeImageKey?: string
+  largeImageText?: string
+}
 export class DiscordRpc {
-  constructor(opts: { clientId: string; pipePath?: (index: number) => string; connect?: typeof net.connect })
-  connect(): Promise<boolean>        // 0〜9 番のパイプを順に試し、ハンドシェイク（op 0, {v:1, client_id}）。失敗しても例外を投げず false
-  setActivity(activity: Activity | null): Promise<boolean>  // op 1 SET_ACTIVITY（pid は process.pid、nonce は乱数）。null で消す
+  constructor(opts: {
+    clientId: string
+    pipePath?: (index: number) => string
+    connect?: typeof net.connect
+  })
+  connect(): Promise<boolean> // 0〜9 番のパイプを順に試し、ハンドシェイク（op 0, {v:1, client_id}）。失敗しても例外を投げず false
+  setActivity(activity: Activity | null): Promise<boolean> // op 1 SET_ACTIVITY（pid は process.pid、nonce は乱数）。null で消す
   close(): void
 }
 ```
@@ -56,9 +85,9 @@ export class DiscordRpc {
 
 ```ts
 export function readResourcePacks(optionsTxt: string): string[]
-export function setResourcePacks(optionsTxt: string, enabled: string[]): string   // enabled は "file/xxx.zip" の形
+export function setResourcePacks(optionsTxt: string, enabled: string[]): string // enabled は "file/xxx.zip" の形
 export function readIrisShader(props: string): { enabled: boolean; pack: string | null }
-export function setIrisShader(props: string, pack: string | null): string        // shaderPack= と enableShaders=
+export function setIrisShader(props: string, pack: string | null): string // shaderPack= と enableShaders=
 ```
 
 - options.txt の `resourcePacks:[…]` は JSON 配列。`vanilla`（と `fabric`・`mod_resources` のような既存の組み込みパック）は残し、順番は「組み込み → enabled の順」。`incompatibleResourcePacks` から enabled のものを外す。ほかの行は一字一句変えない。行が無ければ足す。改行コード（CRLF/LF）を保つ。
@@ -69,9 +98,11 @@ export function setIrisShader(props: string, pack: string | null): string       
 ## 5. `src/main/javaArgs.ts` — JVM 引数とメモリ
 
 ```ts
-export function parseJvmArgs(input: string): { ok: true; args: string[] } | { ok: false; error: string }
+export function parseJvmArgs(
+  input: string,
+): { ok: true; args: string[] } | { ok: false; error: string }
 export function memoryPlan(totalMb: number): { maxAllowedMb: number; recommendedMb: number }
-export function validateMemory(minMb: number, maxMb: number, totalMb: number): string | null   // 問題があれば日本語の理由
+export function validateMemory(minMb: number, maxMb: number, totalMb: number): string | null // 問題があれば日本語の理由
 ```
 
 - 空白区切り、ダブルクォートでくくれる。拒否: 改行・NUL、`-` で始まらない語、`-Xmx`/`-Xms`/`-XX:MaxRAM`（メモリは設定欄で決める）、`-jar`・`-cp`・`-classpath`・`--class-path`・`-javaagent`・`-agentlib`・`-agentpath`・`-Djava.class.path`、64 個超、1 語 500 文字超。エラー文は日本語で、どの語が駄目かを書く。
@@ -81,14 +112,21 @@ export function validateMemory(minMb: number, maxMb: number, totalMb: number): s
 ## 6. `src/main/integrity.ts` — 構成チェック（サーバーと同じ構成か）
 
 ```ts
-export interface LocalJar { fileName: string; sha1: string }
+export interface LocalJar {
+  fileName: string
+  sha1: string
+}
 export interface IntegrityReport {
   verdict: 'ok' | 'warn' | 'block'
-  missing: ManifestMod[]                          // 入っているべき required が無い
-  mismatched: Array<{ mod: ManifestMod; fileName: string }>  // 名前は一致するが中身が違う
-  extras: Array<{ fileName: string; allowed: boolean }>      // マニフェストに無い jar
+  missing: ManifestMod[] // 入っているべき required が無い
+  mismatched: Array<{ mod: ManifestMod; fileName: string }> // 名前は一致するが中身が違う
+  extras: Array<{ fileName: string; allowed: boolean }> // マニフェストに無い jar
 }
-export function checkIntegrity(input: { manifest: LauncherManifest; disabledOptional: ReadonlySet<string>; local: LocalJar[] }): IntegrityReport
+export function checkIntegrity(input: {
+  manifest: LauncherManifest
+  disabledOptional: ReadonlySet<string>
+  local: LocalJar[]
+}): IntegrityReport
 ```
 
 - 照合はハッシュ（sha1）で行う。ファイル名が違っても中身が同じなら一致とみなす。
@@ -100,9 +138,24 @@ export function checkIntegrity(input: { manifest: LauncherManifest; disabledOpti
 ## 7. `src/main/modSync.ts` — Mod の同期（サーバーと同じ構成にそろえる）
 
 ```ts
-export interface SyncPlan { download: ManifestMod[]; retire: string[]; keep: string[] }
-export function planSync(input: { manifest: LauncherManifest; disabledOptional: ReadonlySet<string>; local: LocalJar[]; managed: string[] }): SyncPlan
-export async function applySync(input: { modsDir: string; plan: SyncPlan; download: (url: string, maxBytes: number) => Promise<Buffer>; now?: Date; onProgress?: (p: { done: number; total: number; fileName: string }) => void }): Promise<{ installed: string[]; retired: string[] }>
+export interface SyncPlan {
+  download: ManifestMod[]
+  retire: string[]
+  keep: string[]
+}
+export function planSync(input: {
+  manifest: LauncherManifest
+  disabledOptional: ReadonlySet<string>
+  local: LocalJar[]
+  managed: string[]
+}): SyncPlan
+export async function applySync(input: {
+  modsDir: string
+  plan: SyncPlan
+  download: (url: string, maxBytes: number) => Promise<Buffer>
+  now?: Date
+  onProgress?: (p: { done: number; total: number; fileName: string }) => void
+}): Promise<{ installed: string[]; retired: string[] }>
 export async function readLocalJars(modsDir: string): Promise<LocalJar[]>
 export async function readManaged(modsDir: string): Promise<string[]>
 ```
@@ -118,13 +171,31 @@ export async function readManaged(modsDir: string): Promise<string[]>
 
 ```ts
 export interface Http {
-  getJson<T>(url: string, schema: z.ZodType<T>, opts?: { timeoutMs?: number; headers?: Record<string, string> }): Promise<T>
-  postJson<T>(url: string, body: unknown, schema: z.ZodType<T>, opts?: { timeoutMs?: number }): Promise<T>
-  getBytes(url: string, opts: { maxBytes: number; allowedHosts?: readonly string[]; timeoutMs?: number }): Promise<Buffer>
+  getJson<T>(
+    url: string,
+    schema: z.ZodType<T>,
+    opts?: { timeoutMs?: number; headers?: Record<string, string> },
+  ): Promise<T>
+  postJson<T>(
+    url: string,
+    body: unknown,
+    schema: z.ZodType<T>,
+    opts?: { timeoutMs?: number },
+  ): Promise<T>
+  getBytes(
+    url: string,
+    opts: { maxBytes: number; allowedHosts?: readonly string[]; timeoutMs?: number },
+  ): Promise<Buffer>
 }
-export function createHttp(opts: { fetch?: typeof fetch; userAgent: string; allowHttpLocalhost?: boolean }): Http
-export class HttpError extends Error { status?: number }
-export const DOWNLOAD_HOSTS: readonly string[]   // cdn.modrinth.com, edge.forgecdn.net, mediafilez.forgecdn.net
+export function createHttp(opts: {
+  fetch?: typeof fetch
+  userAgent: string
+  allowHttpLocalhost?: boolean
+}): Http
+export class HttpError extends Error {
+  status?: number
+}
+export const DOWNLOAD_HOSTS: readonly string[] // cdn.modrinth.com, edge.forgecdn.net, mediafilez.forgecdn.net
 ```
 
 - https のみ（`allowHttpLocalhost` のときだけ http://localhost・127.0.0.1 を許す）。

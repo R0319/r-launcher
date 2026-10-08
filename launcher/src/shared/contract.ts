@@ -98,7 +98,10 @@ export const LinkStartSchema = z.object({
 })
 export const LinkVerifySchema = z.object({
   authorizeUrl: z.string().url(),
-  current: z.object({ discordName: z.string().max(100) }).nullable().default(null),
+  current: z
+    .object({ discordName: z.string().max(100) })
+    .nullable()
+    .default(null),
 })
 export const LinkStatusSchema = z.object({
   state: z.enum(['pending', 'linked', 'expired']),

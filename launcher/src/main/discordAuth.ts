@@ -37,7 +37,9 @@ export function getDiscordAuthCode(): Promise<string> {
       if (code) {
         settle(() => resolve(code))
       } else {
-        settle(() => reject(new Error(`Discord認可コードの取得に失敗しました${error ? `: ${error}` : ''}`)))
+        settle(() =>
+          reject(new Error(`Discord認可コードの取得に失敗しました${error ? `: ${error}` : ''}`)),
+        )
       }
     }
 

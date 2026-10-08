@@ -1,82 +1,76 @@
+// ゲームの起動（eml-lib）。Mod はこれより前に modSync でそろえておき、eml-lib の掃除機能は使わない
+// （config/ や mods/ を勝手に消さないため）。
 import EMLLib from 'eml-lib'
 import type { Account } from 'eml-lib'
-import { INSTANCE_ROOT_NAME } from './instancePath'
-import { resolveLoaderVersion } from './loaderVersion'
-import type { LaunchProgress, Modpack } from '../shared/types'
+import type { LauncherManifest } from '../shared/contract'
+import type { JavaSettings } from '../shared/settings'
+import type { PlayPhase } from '../shared/ipc'
+import { INSTANCE_ROOT_NAME, sanitizeModpackId } from './instancePath'
 
-export interface LaunchOptions {
+export interface LaunchInput {
   account: Account
-  memoryMinMb: number
-  memoryMaxMb: number
   instanceBaseDir: string
-  modpack: Modpack
+  manifest: LauncherManifest
+  java: JavaSettings
+  jvmArgs: string[]
+  onPhase: (phase: PlayPhase) => void
+  onGameLine: (line: string) => void
+  onDebug: (line: string) => void
 }
 
-// 独自のMOD同期（syncMods）で mods/ を完全一致させた後にこれを呼ぶ。
-// EML-Lib自身のcleaning機能はconfig/やmods/を勝手に削除しうるため無効化し、
-// MOD管理は本ランチャーのロジックに一本化する（仕様書3.4）。
-export async function launchModpack(
-  { account, memoryMinMb, memoryMaxMb, instanceBaseDir, modpack }: LaunchOptions,
-  onProgress: (progress: LaunchProgress) => void,
-): Promise<void> {
-  onProgress({ phase: 'installing_loader' })
+/** ログに書く前に、トークンとして使われうる値を消す（ファイルにトークンを残さない） */
+export function stripSecrets(line: string): string {
+  return line
+    .replace(/(--(?:accessToken|clientId|xuid|uuid)\s+)\S+/gi, '$1<hidden>')
+    .replace(/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '<hidden>')
+}
 
-  const loaderVersion = await resolveLoaderVersion(
-    modpack.loader,
-    modpack.mcVersion,
-    modpack.loaderVersion,
-  )
-  console.log(
-    `[launch] modpack=${modpack.id} loader=${modpack.loader}@${loaderVersion} MC=${modpack.mcVersion}`,
-  )
-  console.log(`[launch] instance base dir: ${instanceBaseDir}`)
-
-  const loaderConfig =
-    modpack.loader === 'vanilla'
-      ? undefined
-      : { loader: modpack.loader, version: loaderVersion }
-
-  const launcher = new EMLLib.Launcher({
-    // root='r-launcher' + profile.slug=modpackId → <APPDATA>/.r-launcher/<slug> に隔離
+/** eml-lib に渡す設定（テストで中身を確かめられるよう分けておく） */
+export function emlConfig(input: Omit<LaunchInput, 'onPhase' | 'onGameLine' | 'onDebug'>) {
+  const { manifest, java } = input
+  return {
     root: INSTANCE_ROOT_NAME,
-    storage: 'isolated',
-    profile: { slug: modpack.id },
-    minecraft: {
-      version: modpack.mcVersion,
-      loader: loaderConfig,
+    storage: 'isolated' as const,
+    profile: {
+      slug: sanitizeModpackId(manifest.id),
+      minecraft: {
+        version: manifest.mcVersion,
+        loader: { loader: manifest.loader, version: manifest.loaderVersion },
+      },
     },
     cleaning: { enabled: false },
-    account,
-    java: { install: 'auto' },
-    memory: { min: memoryMinMb, max: memoryMaxMb },
-  })
+    account: input.account,
+    java:
+      java.mode === 'manual' && java.path
+        ? { install: 'manual' as const, absolutePath: java.path, args: input.jvmArgs }
+        : { install: 'auto' as const, args: input.jvmArgs },
+    memory: { min: Math.min(java.memoryMinMb, java.memoryMaxMb), max: java.memoryMaxMb },
+  }
+}
 
-  launcher.on('launch_install_loader', () => onProgress({ phase: 'installing_loader' }))
+export async function launchGame(input: LaunchInput): Promise<void> {
+  const launcher = new EMLLib.Launcher(emlConfig(input))
 
-  // EML-Lib は種別（ローダー/ライブラリ+natives/アセット/Java）ごとに別々の総量で
-  // download_progress を出すため、種別が変わると total がリセットされ downloaded も
-  // 小さい値に戻る。downloaded の減少を「次の段階の開始」と見なし段階番号を進める。
+  // eml-lib は種類（Java・ライブラリ・アセットなど）ごとに総量を出し直すので、減ったら次の段階とみなす
   let stage = 1
-  let prevDownloaded = -1
+  let previous = -1
   launcher.on('download_progress', ({ downloaded, total }) => {
-    if (downloaded.size < prevDownloaded) stage++
-    prevDownloaded = downloaded.size
-    onProgress({
-      phase: 'downloading',
-      downloadedSize: downloaded.size,
-      totalSize: total.size,
-      stage,
-    })
+    if (downloaded.size < previous) stage++
+    previous = downloaded.size
+    input.onPhase({ phase: 'game', stage, downloaded: downloaded.size, total: total.size })
   })
-  launcher.on('launch_launch', () => onProgress({ phase: 'launching' }))
-  launcher.on('launch_close', (code) => onProgress({ phase: 'closed', code }))
-  launcher.on('launch_debug', (message) => console.debug('[eml-lib]', message))
+  launcher.on('launch_launch', () => input.onPhase({ phase: 'launching' }))
+  launcher.on('launch_data', (data) => {
+    input.onPhase({ phase: 'running' })
+    input.onGameLine(stripSecrets(data))
+  })
+  launcher.on('launch_close', (code) => input.onPhase({ phase: 'closed', code }))
+  launcher.on('launch_debug', (message) => input.onDebug(stripSecrets(message)))
 
-  // EML-Lib は process.env.APPDATA(win)/HOME(mac/linux) を基準にゲームフォルダを作る。
-  // 起動処理の間だけ基準を instanceBaseDir へ差し替え、終了後に必ず元へ戻す。
+  // eml-lib は APPDATA（Windows）/ HOME を基準にゲームフォルダを作る。起動処理の間だけ差し替えて必ず戻す
   const envKey = process.platform === 'win32' ? 'APPDATA' : 'HOME'
   const original = process.env[envKey]
-  process.env[envKey] = instanceBaseDir
+  process.env[envKey] = input.instanceBaseDir
   try {
     await launcher.launch()
   } finally {
