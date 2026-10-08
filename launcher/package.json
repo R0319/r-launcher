@@ -51,7 +51,8 @@
       "dist/preload/**/*",
       "dist/renderer/**/*",
       "dist/shared/**/*",
-      "package.json"
+      "package.json",
+      "resources/icon.png"
     ],
     "win": {
       "target": [
@@ -62,7 +63,8 @@
           ]
         }
       ],
-      "artifactName": "${productName}-Setup-${version}.${ext}"
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "icon": "resources/icon.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -70,7 +72,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "R-Launcher"
+      "shortcutName": "R-Launcher",
+      "installerIcon": "resources/icon.ico",
+      "uninstallerIcon": "resources/icon.ico"
     },
     "publish": [
       {

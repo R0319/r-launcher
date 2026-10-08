@@ -57,6 +57,7 @@ function createWindow() {
     minHeight: 600,
     backgroundColor: '#181917',
     title: 'R-Launcher',
+    icon: path.join(__dirname, '..', '..', 'resources', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,

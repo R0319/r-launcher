@@ -1,3 +1,4 @@
+import iconUrl from './assets/icon-64.png'
 import type { AccountView, ServerView } from '../shared/ipc'
 import { loaderLabel } from './api'
 import { IconLog, IconReload, IconSettings } from './Icons'
@@ -35,7 +36,10 @@ export function Rail(props: {
   return (
     <nav className="rail" aria-label="サーバー">
       <div className="rail-head">
-        <span className="wordmark">R-Launcher</span>
+        <span className="wordmark">
+          <img src={iconUrl} alt="" width={20} height={20} />
+          R-Launcher
+        </span>
         <button
           type="button"
           className="btn quiet"
